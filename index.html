@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Рандомайзер обеда</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+        rel="stylesheet"
+    >
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<!-- ========================================================= -->
+<!-- ЗАГРУЗКА -->
+<!-- ========================================================= -->
+
+<div id="loadingScreen" class="loading-screen">
+
+    <div class="dog">
+
+        <div class="heart heart--1"></div>
+        <div class="heart heart--2"></div>
+        <div class="heart heart--3"></div>
+        <div class="heart heart--4"></div>
+
+        <div class="head">
+
+            <div class="year year--left"></div>
+            <div class="year year--right"></div>
+
+            <div class="nose"></div>
+
+            <div class="face">
+                <div class="eye eye--left"></div>
+                <div class="eye eye--right"></div>
+                <div class="mouth"></div>
+            </div>
+
+        </div>
+
+        <div class="body">
+
+            <div class="cheast"></div>
+
+            <div class="back"></div>
+
+            <div class="legs">
+
+                <div class="legs__front legs__front--left"></div>
+                <div class="legs__front legs__front--right"></div>
+
+                <div class="legs__back legs__back--left"></div>
+                <div class="legs__back legs__back--right"></div>
+
+            </div>
+
+            <div class="tail"></div>
+
+        </div>
+
+    </div>
+
+    <div class="loading-title">
+        Рандомайзер
+    </div>
+
+    <div class="loading-text">
+        Подготавливаем расписание...
+    </div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ОСНОВНОЕ ПРИЛОЖЕНИЕ -->
+<!-- ========================================================= -->
+
+<div class="app" id="app" hidden>
+
+    <!-- HEADER -->
+
+    <header class="header">
+
+        <div class="brand">
+
+            <div class="brand-icon">
+
+                <!--
+                    Положи картинку логотипа рядом с index.html
+                    и назови её logo.png
+                -->
+
+                <img
+                    src="logo.png"
+                    alt="Логотип"
+                >
+
+            </div>
+
+            <div>
+
+                <h1>
+                    Рандомайзер
+                </h1>
+
+                <p>
+                    Очередность на обед
+                </p>
+
+            </div>
+
+        </div>
+
+        <button
+            class="icon-button"
+            id="settingsButton"
+            title="Настройки"
+        >
+            ⚙
+        </button>
+
+    </header>
+
+
+    <!-- ===================================================== -->
+    <!-- ДАТА -->
+    <!-- ===================================================== -->
+
+    <section class="date-card">
+
+        <button
+            class="date-arrow"
+            id="previousDayButton"
+            title="Предыдущий день"
+        >
+            ‹
+        </button>
+
+        <div class="date-center">
+
+            <span class="date-label">
+                Расписание
+            </span>
+
+            <strong id="currentDate">
+                —
+            </strong>
+
+        </div>
+
+        <input
+            type="date"
+            id="datePicker"
+            class="date-picker"
+        >
+
+        <button
+            class="today-button"
+            id="todayButton"
+        >
+            Сегодня
+        </button>
+
+        <button
+            class="date-arrow"
+            id="nextDayButton"
+            title="Следующий день"
+        >
+            ›
+        </button>
+
+    </section>
+
+
+    <!-- ===================================================== -->
+    <!-- ПОДСКАЗКА ПЕРЕМЕЩЕНИЯ -->
+    <!-- ===================================================== -->
+
+    <div
+        class="move-hint"
+        id="moveHint"
+        hidden
+    >
+        Выберите второго человека, чтобы поменять их местами.
+        <button id="cancelMoveButton">
+            Отмена
+        </button>
+    </div>
+
+
+    <!-- ===================================================== -->
+    <!-- РАСПИСАНИЕ -->
+    <!-- ===================================================== -->
+
+    <main id="schedule"></main>
+
+
+    <!-- ===================================================== -->
+    <!-- ACTIONS -->
+    <!-- ===================================================== -->
+
+    <section class="actions">
+
+        <button
+            class="generate-button"
+            id="generateButton"
+        >
+            <span>⤨</span>
+            Перегенерировать
+        </button>
+
+        <button
+            class="secondary-button"
+            id="showHistoryButton"
+        >
+            История
+        </button>
+
+    </section>
+
+
+    <!-- ===================================================== -->
+    <!-- FOOTER -->
+    <!-- ===================================================== -->
+
+    <footer>
+
+        <span>
+            Нажмите на двух сотрудников, чтобы поменять их местами
+        </span>
+
+    </footer>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- SETTINGS MODAL -->
+<!-- ========================================================= -->
+
+<div
+    class="modal hidden"
+    id="settingsModal"
+>
+
+    <div class="modal-content">
+
+        <div class="modal-header">
+
+            <div>
+
+                <h2>
+                    Сотрудники
+                </h2>
+
+                <p>
+                    Управление списком
+                </p>
+
+            </div>
+
+            <button
+                class="close-button"
+                id="closeSettings"
+            >
+                ×
+            </button>
+
+        </div>
+
+
+        <div
+            class="employee-list"
+            id="employeeList"
+        ></div>
+
+
+        <div class="add-employee">
+
+            <input
+                type="text"
+                id="employeeName"
+                placeholder="Имя сотрудника"
+            >
+
+            <select id="employeeGender">
+
+                <option value="female">
+                    Девушка
+                </option>
+
+                <option value="male">
+                    Парень
+                </option>
+
+            </select>
+
+            <button id="addEmployeeButton">
+                Добавить
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- HISTORY MODAL -->
+<!-- ========================================================= -->
+
+<div
+    class="modal hidden"
+    id="historyModal"
+>
+
+    <div class="modal-content">
+
+        <div class="modal-header">
+
+            <div>
+
+                <h2>
+                    История
+                </h2>
+
+                <p>
+                    Предыдущие расписания
+                </p>
+
+            </div>
+
+            <button
+                class="close-button"
+                id="closeHistory"
+            >
+                ×
+            </button>
+
+        </div>
+
+        <div id="historyList"></div>
+
+    </div>
+
+</div>
+
+
+<script type="module" src="script.js"></script>
+
+</body>
+</html>
