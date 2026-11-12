@@ -1,3 +1,4 @@
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
 import {
     getFirestore,
@@ -37,7 +38,8 @@ const TIMES = [
     "13:00–14:00"
 ];
 
-const GROUP_SIZE = 6;
+const MAX_GROUP_SIZE = 6;
+const MAX_ORDINARY_MALES = 2;
 
 const STORAGE_EMPLOYEES = "lunch_employees_v3";
 const STORAGE_SCHEDULES = "lunch_schedules_v3";
@@ -55,7 +57,6 @@ const DEFAULT_EMPLOYEES = [
     { id: "aiperi", name: "Айпери", gender: "female" },
     { id: "nargiz", name: "Наргиз", gender: "female" },
     { id: "aidana", name: "Айдана", gender: "female" },
-    { id: "gulnaz", name: "Гулназ", gender: "female" },
     { id: "aidai", name: "Айдай", gender: "female" },
     { id: "arina", name: "Арина", gender: "female" },
     { id: "elnura", name: "Эльнура", gender: "female" },
@@ -118,6 +119,13 @@ function normalizeName(name) {
     return original;
 }
 
+function isRemovedEmployee(person) {
+    const name = normalizeName(person?.name).toLocaleLowerCase("ru-RU");
+    const id = String(person?.id ?? "").toLowerCase();
+
+    return name === "гулназ" || id === "gulnaz";
+}
+
 function createIdFromName(name) {
     return normalizeName(name)
         .toLocaleLowerCase("ru-RU")
@@ -140,6 +148,14 @@ function normalizePerson(person, index = 0) {
     };
 }
 
+function cleanEmployees(employees) {
+    if (!Array.isArray(employees)) return [];
+
+    return employees
+        .filter(person => !isRemovedEmployee(person))
+        .map(normalizePerson);
+}
+
 function normalizeSchedule(schedule) {
     if (
         !schedule ||
@@ -157,7 +173,9 @@ function normalizeSchedule(schedule) {
             return {
                 time,
                 people: Array.isArray(group?.people)
-                    ? group.people.map(normalizePerson)
+                    ? group.people
+                        .filter(person => !isRemovedEmployee(person))
+                        .map(normalizePerson)
                     : []
             };
         })
@@ -173,7 +191,7 @@ function getEmployees() {
         const raw = localStorage.getItem(STORAGE_EMPLOYEES);
 
         if (!raw) {
-            return DEFAULT_EMPLOYEES.map(normalizePerson);
+            return cleanEmployees(DEFAULT_EMPLOYEES);
         }
 
         const employees = JSON.parse(raw);
@@ -182,15 +200,15 @@ function getEmployees() {
             throw new Error("Неверный формат списка сотрудников");
         }
 
-        return employees.map(normalizePerson);
+        return cleanEmployees(employees);
     } catch (error) {
         console.error("Ошибка чтения сотрудников:", error);
-        return DEFAULT_EMPLOYEES.map(normalizePerson);
+        return cleanEmployees(DEFAULT_EMPLOYEES);
     }
 }
 
 function saveEmployees(employees) {
-    const normalized = employees.map(normalizePerson);
+    const normalized = cleanEmployees(employees);
 
     localStorage.setItem(
         STORAGE_EMPLOYEES,
@@ -219,7 +237,9 @@ function getSchedules() {
 
         if (!Array.isArray(schedules)) return [];
 
-        return schedules.map(normalizeSchedule).filter(Boolean);
+        return schedules
+            .map(normalizeSchedule)
+            .filter(Boolean);
     } catch (error) {
         console.error("Ошибка чтения расписаний:", error);
         return [];
@@ -276,7 +296,7 @@ function migrateOldHistory() {
 }
 
 // ==================================================
-// ЗАГРУЗКА И СИНХРОНИЗАЦИЯ FIREBASE
+// FIREBASE
 // ==================================================
 
 async function loadInitialCloudData() {
@@ -287,34 +307,39 @@ async function loadInitialCloudData() {
         getDoc(SCHEDULES_DOC)
     ]);
 
+    let employees;
+
     if (
         employeesSnapshot.exists() &&
         Array.isArray(employeesSnapshot.data().items)
     ) {
-        localStorage.setItem(
-            STORAGE_EMPLOYEES,
-            JSON.stringify(
-                employeesSnapshot.data().items.map(normalizePerson)
-            )
-        );
+        employees = cleanEmployees(employeesSnapshot.data().items);
     } else {
-        await setDoc(EMPLOYEES_DOC, {
-            items: getEmployees(),
-            updatedAt: new Date().toISOString()
-        });
+        employees = cleanEmployees(DEFAULT_EMPLOYEES);
     }
+
+    // Сразу сохраняем очищенный список в Firebase.
+    await setDoc(EMPLOYEES_DOC, {
+        items: employees,
+        updatedAt: new Date().toISOString()
+    });
+
+    localStorage.setItem(
+        STORAGE_EMPLOYEES,
+        JSON.stringify(employees)
+    );
 
     if (
         schedulesSnapshot.exists() &&
         Array.isArray(schedulesSnapshot.data().items)
     ) {
+        const schedules = schedulesSnapshot.data().items
+            .map(normalizeSchedule)
+            .filter(Boolean);
+
         localStorage.setItem(
             STORAGE_SCHEDULES,
-            JSON.stringify(
-                schedulesSnapshot.data().items
-                    .map(normalizeSchedule)
-                    .filter(Boolean)
-            )
+            JSON.stringify(schedules)
         );
     } else {
         await setDoc(SCHEDULES_DOC, {
@@ -335,11 +360,13 @@ function startCloudListeners() {
             return;
         }
 
+        const employees = cleanEmployees(snapshot.data().items);
+
         applyingRemoteData = true;
 
         localStorage.setItem(
             STORAGE_EMPLOYEES,
-            JSON.stringify(snapshot.data().items.map(normalizePerson))
+            JSON.stringify(employees)
         );
 
         applyingRemoteData = false;
@@ -376,7 +403,12 @@ function startCloudListeners() {
             schedule => schedule.date === selectedDate
         );
 
-        if (current) renderSchedule(current);
+        if (current && scheduleMatchesEmployees(current)) {
+            renderSchedule(current);
+        } else {
+            const updated = ensureScheduleChain(selectedDate);
+            if (updated) renderSchedule(updated);
+        }
 
         if (!historyModal.classList.contains("hidden")) {
             renderHistory();
@@ -461,16 +493,91 @@ function countOrdinaryMales(people) {
 }
 
 // ==================================================
-// СОЗДАНИЕ РАСПИСАНИЯ
+// РАЗМЕРЫ ГРУПП
+// 17 человек = 6 / 6 / 5
+// ==================================================
+
+function getGroupSizes(employeeCount) {
+    const base = Math.floor(employeeCount / 3);
+    const remainder = employeeCount % 3;
+
+    return [
+        base + (remainder > 0 ? 1 : 0),
+        base + (remainder > 1 ? 1 : 0),
+        base
+    ];
+}
+
+function scheduleMatchesEmployees(schedule) {
+    if (!schedule || !Array.isArray(schedule.groups)) {
+        return false;
+    }
+
+    const employees = getEmployees();
+    const sizes = getGroupSizes(employees.length);
+
+    if (employees.length === 0) return false;
+
+    if (schedule.groups.length !== 3) return false;
+
+    const schedulePeople = schedule.groups.flatMap(
+        group => group.people
+    );
+
+    const scheduleIds = schedulePeople.map(person => person.id);
+    const employeeIds = employees.map(person => person.id);
+
+    if (scheduleIds.length !== employeeIds.length) return false;
+
+    if (new Set(scheduleIds).size !== scheduleIds.length) {
+        return false;
+    }
+
+    if (!employeeIds.every(id => scheduleIds.includes(id))) {
+        return false;
+    }
+
+    if (
+        schedule.groups.some(
+            (group, index) => group.people.length !== sizes[index]
+        )
+    ) {
+        return false;
+    }
+
+    if (
+        schedule.groups.some(
+            group => countOrdinaryMales(group.people) > MAX_ORDINARY_MALES
+        )
+    ) {
+        return false;
+    }
+
+    const kursantGroup = schedule.groups[2].people.some(
+        person => normalizeName(person.name) === "Курсант"
+    );
+
+    return kursantGroup;
+}
+
+// ==================================================
+// СОЗДАНИЕ ПЕРВИЧНОГО РАСПИСАНИЯ
 // ==================================================
 
 function createInitialSchedule(date) {
-    const employees = getEmployees();
+    const employees = shuffle(getEmployees());
 
-    if (employees.length !== 18) {
+    if (employees.length < 3 || employees.length > 18) {
         alert(
-            `Для автоматического расписания нужно 18 сотрудников.\nСейчас: ${employees.length}`
+            `Для автоматического расписания нужно от 3 до 18 сотрудников.\nСейчас: ${employees.length}`
         );
+        return null;
+    }
+
+    const sizes = getGroupSizes(employees.length);
+
+    if (sizes.some(size => size > MAX_GROUP_SIZE)) {
+        alert("В одной группе не может быть больше 6 человек.");
         return null;
     }
 
@@ -491,45 +598,95 @@ function createInitialSchedule(date) {
     );
 
     const females = shuffle(
-        employees.filter(person => person.gender === "female")
+        employees.filter(person =>
+            person.gender === "female"
+        )
     );
 
-    const groups = [[], [], []];
-
-    ordinaryMales.forEach((person, index) => {
-        groups[index % 3].push(person);
-    });
-
-    groups[2].push(kursant);
-
-    for (const female of females) {
-        const available = groups
-            .map((group, index) => ({ group, index }))
-            .filter(item => item.group.length < GROUP_SIZE);
-
-        if (!available.length) break;
-
-        const minSize = Math.min(
-            ...available.map(item => item.group.length)
-        );
-
-        const smallest = available.filter(
-            item => item.group.length === minSize
-        );
-
-        const selected = smallest[
-            Math.floor(Math.random() * smallest.length)
-        ];
-
-        selected.group.push(female);
-    }
-
-    if (groups.some(group => group.length !== GROUP_SIZE)) {
-        alert("Не удалось сформировать группы по 6 человек.");
+    if (ordinaryMales.length > MAX_ORDINARY_MALES * 3) {
+        alert("Слишком много парней для текущего ограничения.");
         return null;
     }
 
-    if (groups.some(group => countOrdinaryMales(group) > 2)) {
+    const groups = [[], [], []];
+
+    // Курсант всегда в третьей группе.
+    groups[2].push(kursant);
+
+    // Распределяем обычных парней равномерно.
+    for (const person of ordinaryMales) {
+        const available = groups
+            .map((group, index) => ({
+                group,
+                index
+            }))
+            .filter(item =>
+                item.group.length < sizes[item.index] &&
+                countOrdinaryMales(item.group) < MAX_ORDINARY_MALES
+            );
+
+        if (!available.length) {
+            alert("Невозможно распределить парней по группам.");
+            return null;
+        }
+
+        available.sort((a, b) => {
+            const maleDifference =
+                countOrdinaryMales(a.group) -
+                countOrdinaryMales(b.group);
+
+            if (maleDifference !== 0) return maleDifference;
+
+            return a.group.length - b.group.length;
+        });
+
+        available[0].group.push(person);
+    }
+
+    // Заполняем оставшиеся места девушками.
+    for (const person of females) {
+        const available = groups
+            .map((group, index) => ({
+                group,
+                index
+            }))
+            .filter(item =>
+                item.group.length < sizes[item.index]
+            );
+
+        if (!available.length) break;
+
+        available.sort((a, b) =>
+            a.group.length - b.group.length
+        );
+
+        const smallestSize = available[0].group.length;
+
+        const smallestGroups = available.filter(
+            item => item.group.length === smallestSize
+        );
+
+        const selected = smallestGroups[
+            Math.floor(Math.random() * smallestGroups.length)
+        ];
+
+        selected.group.push(person);
+    }
+
+    if (
+        groups.some(
+            (group, index) => group.length !== sizes[index]
+        )
+    ) {
+        alert("Не удалось сформировать все группы.");
+        return null;
+    }
+
+    if (
+        groups.some(
+            group => countOrdinaryMales(group) > MAX_ORDINARY_MALES
+        )
+    ) {
         alert("Не удалось соблюсти ограничение по количеству парней.");
         return null;
     }
@@ -545,53 +702,127 @@ function createInitialSchedule(date) {
 
 // ==================================================
 // РОТАЦИЯ МЕЖДУ ДНЯМИ
-// 11 -> 12, 12 -> 13, 13 -> 11
-// Курсант остаётся в третьей группе.
 // ==================================================
 
 function createNextDaySchedule(previousSchedule, newDate) {
-    if (
-        !previousSchedule?.groups ||
-        previousSchedule.groups.length !== 3
-    ) {
+    const employees = getEmployees();
+
+    // Если состав сотрудников изменился — создаём новое расписание.
+    if (!scheduleMatchesEmployees(previousSchedule)) {
         return createInitialSchedule(newDate);
     }
 
     const oldGroups = previousSchedule.groups;
+    const sizes = getGroupSizes(employees.length);
 
-    const group1 = oldGroups[2].people.filter(
+    const oldGroup1 = [...oldGroups[0].people];
+    const oldGroup2 = [...oldGroups[1].people];
+
+    const oldGroup3 = oldGroups[2].people.filter(
         person => normalizeName(person.name) !== "Курсант"
     );
 
-    const group2 = [...oldGroups[0].people];
-    const group3 = [...oldGroups[1].people];
-
     const kursant = findPersonInGroups(oldGroups, "Курсант");
 
-    let candidateIndex = group3.findIndex(
-        person => person.gender === "female"
-    );
-
-    if (candidateIndex === -1) {
-        candidateIndex = group3.findIndex(person =>
-            person.gender === "male" &&
-            countOrdinaryMales(group1) < 2
-        );
-    }
-
-    if (candidateIndex === -1) {
+    if (!kursant) {
         return createInitialSchedule(newDate);
     }
 
-    group1.push(group3.splice(candidateIndex, 1)[0]);
+    // Новая первая группа получает сотрудников из третьей.
+    const newGroup1 = [...oldGroup3];
 
-    if (kursant) group3.push(kursant);
+    // Новая вторая группа получает сотрудников из первой.
+    const newGroup2 = [...oldGroup1];
 
-    const allGroups = [group1, group2, group3];
+    // Новая третья группа получает сотрудников из второй.
+    const newGroup3 = [...oldGroup2];
 
-    const invalid = allGroups.some(group =>
-        group.length !== GROUP_SIZE ||
-        countOrdinaryMales(group) > 2
+    // Курсант остаётся в третьей группе.
+    newGroup3.push(kursant);
+
+    // При составе 17 человек нужно переместить двух сотрудников
+    // из новой третьей группы в новую первую.
+    const needed = sizes[0] - newGroup1.length;
+
+    if (needed > 0) {
+        const candidates = shuffle([...newGroup3].filter(
+            person => normalizeName(person.name) !== "Курсант"
+        ));
+
+        // Сначала рассматриваем девушек, чтобы не нарушать
+        // ограничение по количеству парней.
+        candidates.sort((a, b) => {
+            if (a.gender === "female" && b.gender === "male") return -1;
+            if (a.gender === "male" && b.gender === "female") return 1;
+            return 0;
+        });
+
+        let selected = null;
+
+        function findTransfer(startIndex, chosen) {
+            if (chosen.length === needed) {
+                const chosenIds = new Set(
+                    chosen.map(person => person.id)
+                );
+
+                const testGroup1 = [...newGroup1, ...chosen];
+
+                const testGroup3 = newGroup3.filter(
+                    person => !chosenIds.has(person.id)
+                );
+
+                if (
+                    testGroup1.length === sizes[0] &&
+                    testGroup3.length === sizes[2] &&
+                    countOrdinaryMales(testGroup1) <= MAX_ORDINARY_MALES &&
+                    countOrdinaryMales(testGroup3) <= MAX_ORDINARY_MALES
+                ) {
+                    selected = [...chosen];
+                    return true;
+                }
+
+                return false;
+            }
+
+            for (let i = startIndex; i < candidates.length; i++) {
+                chosen.push(candidates[i]);
+
+                if (findTransfer(i + 1, chosen)) {
+                    return true;
+                }
+
+                chosen.pop();
+            }
+
+            return false;
+        }
+
+        if (!findTransfer(0, [])) {
+            return createInitialSchedule(newDate);
+        }
+
+        const selectedIds = new Set(
+            selected.map(person => person.id)
+        );
+
+        newGroup1.push(...selected);
+
+        for (let i = newGroup3.length - 1; i >= 0; i--) {
+            if (selectedIds.has(newGroup3[i].id)) {
+                newGroup3.splice(i, 1);
+            }
+        }
+    }
+
+    const allGroups = [
+        newGroup1,
+        newGroup2,
+        newGroup3
+    ];
+
+    const invalid = allGroups.some((group, index) =>
+        group.length !== sizes[index] ||
+        countOrdinaryMales(group) > MAX_ORDINARY_MALES
     );
 
     if (invalid) {
@@ -607,6 +838,10 @@ function createNextDaySchedule(previousSchedule, newDate) {
     };
 }
 
+// ==================================================
+// СОХРАНЕНИЕ РАСПИСАНИЯ
+// ==================================================
+
 function saveSchedule(schedule) {
     if (!schedule) return;
 
@@ -621,13 +856,19 @@ function saveSchedule(schedule) {
 function ensureSchedule(date) {
     const existing = findSchedule(date);
 
-    if (existing) return existing;
+    if (existing && scheduleMatchesEmployees(existing)) {
+        return existing;
+    }
 
     const previous = findSchedule(addDays(date, -1));
 
-    const schedule = previous
-        ? createNextDaySchedule(previous, date)
-        : createInitialSchedule(date);
+    let schedule;
+
+    if (previous && scheduleMatchesEmployees(previous)) {
+        schedule = createNextDaySchedule(previous, date);
+    } else {
+        schedule = createInitialSchedule(date);
+    }
 
     if (schedule) saveSchedule(schedule);
 
@@ -637,10 +878,15 @@ function ensureSchedule(date) {
 function ensureScheduleChain(targetDate) {
     const existing = findSchedule(targetDate);
 
-    if (existing) return existing;
+    if (existing && scheduleMatchesEmployees(existing)) {
+        return existing;
+    }
 
     const earlier = getSchedules()
-        .filter(schedule => schedule.date < targetDate)
+        .filter(schedule =>
+            schedule.date < targetDate &&
+            scheduleMatchesEmployees(schedule)
+        )
         .sort((a, b) => b.date.localeCompare(a.date));
 
     if (!earlier.length) {
@@ -653,7 +899,10 @@ function ensureScheduleChain(targetDate) {
         const nextDate = addDays(current.date, 1);
         const existingNext = findSchedule(nextDate);
 
-        if (existingNext) {
+        if (
+            existingNext &&
+            scheduleMatchesEmployees(existingNext)
+        ) {
             current = existingNext;
         } else {
             const next = createNextDaySchedule(current, nextDate);
@@ -740,8 +989,8 @@ function swapPeople(firstId, secondId) {
     secondGroup[secondPersonIndex] = firstPerson;
 
     if (
-        countOrdinaryMales(firstGroup) > 2 ||
-        countOrdinaryMales(secondGroup) > 2
+        countOrdinaryMales(firstGroup) > MAX_ORDINARY_MALES ||
+        countOrdinaryMales(secondGroup) > MAX_ORDINARY_MALES
     ) {
         alert("В каждой группе может быть не больше 2 обычных парней.");
         clearSelection();
@@ -1041,14 +1290,33 @@ function renderEmployees() {
                 return;
             }
 
-            if (employees.length <= 18) {
-                alert("В автоматическом режиме должно быть 18 сотрудников.");
+            if (employees.length <= 3) {
+                alert("Нельзя оставить меньше трёх сотрудников.");
                 return;
             }
+
+            const removed = employees[index];
+
+            if (!removed) return;
+
+            const confirmed = confirm(
+                `Удалить сотрудника ${removed.name}?`
+            );
+
+            if (!confirmed) return;
 
             employees.splice(index, 1);
 
             saveEmployees(employees);
+
+            // Текущий день формируется заново под новый состав.
+            const newSchedule = createInitialSchedule(selectedDate);
+
+            if (newSchedule) {
+                saveSchedule(newSchedule);
+                renderSchedule(newSchedule);
+            }
+
             renderEmployees();
         });
     });
@@ -1075,6 +1343,11 @@ function addEmployee() {
         return;
     }
 
+    if (employees.length >= 18) {
+        alert("Максимальное количество сотрудников — 18.");
+        return;
+    }
+
     employees.push({
         id: `${createIdFromName(name)}-${Date.now()}`,
         name,
@@ -1083,6 +1356,13 @@ function addEmployee() {
     });
 
     saveEmployees(employees);
+
+    const newSchedule = createInitialSchedule(selectedDate);
+
+    if (newSchedule) {
+        saveSchedule(newSchedule);
+        renderSchedule(newSchedule);
+    }
 
     employeeName.value = "";
     renderEmployees();
@@ -1205,7 +1485,7 @@ async function initialize() {
 
         await loadInitialCloudData();
 
-        // Исправляем старые варианты написания имён.
+        // Сохраняем очищенный список и нормализованные расписания.
         saveEmployees(getEmployees());
         saveSchedules(getSchedules());
 
@@ -1226,6 +1506,9 @@ async function initialize() {
         }
 
         console.log("Рандомайзер запущен.");
+        console.log("Сотрудников:", getEmployees().length);
+        console.log("Размер групп:", getGroupSizes(getEmployees().length));
+
     } catch (error) {
         console.error("Ошибка запуска:", error);
 
@@ -1243,16 +1526,24 @@ async function initialize() {
     }
 }
 
+// ==================================================
+// АВТОПРОВЕРКА РАСПИСАНИЯ
+// ==================================================
+
 setInterval(() => {
     if (!cloudReady) return;
 
     const today = getDateKey();
 
-    if (selectedDate === today && !findSchedule(today)) {
-        const schedule = ensureScheduleChain(today);
+    if (selectedDate === today) {
+        const current = findSchedule(today);
 
-        if (schedule) {
-            renderSchedule(schedule);
+        if (!current || !scheduleMatchesEmployees(current)) {
+            const schedule = ensureScheduleChain(today);
+
+            if (schedule) {
+                renderSchedule(schedule);
+            }
         }
     }
 }, 60000);
