@@ -1,58 +1,57 @@
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
 import {
     getFirestore,
     doc,
     getDoc,
     setDoc,
     onSnapshot
-} from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+} from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 
-// ==================================================
-// FIREBASE
-// ==================================================
+/* =====================================================
+   1. FIREBASE
+===================================================== */
+
+// Оставь здесь свои прежние Firebase-ключи.
+// projectId уже указан для твоего проекта.
 
 const firebaseConfig = {
-    apiKey: "AIzaSyB9WVKkU1fRC7DfdWK58ok8CVAOILINM6o",
+    apiKey: "ВСТАВЬ_СВОЙ_API_KEY",
     authDomain: "lunch-randomizer-40a83.firebaseapp.com",
     projectId: "lunch-randomizer-40a83",
     storageBucket: "lunch-randomizer-40a83.firebasestorage.app",
-    messagingSenderId: "61702529285",
-    appId: "1:61702529285:web:ca7ba0af6cf4e9572c576c",
-    measurementId: "G-27CZ1FHCZL"
+    messagingSenderId: "ВСТАВЬ_SENDER_ID",
+    appId: "ВСТАВЬ_APP_ID"
 };
 
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-const EMPLOYEES_DOC = doc(db, "lunchData", "employees");
-const SCHEDULES_DOC = doc(db, "lunchData", "schedules");
+const employeesRef = doc(db, "lunchData", "employees");
+const schedulesRef = doc(db, "lunchData", "schedules");
 
-// ==================================================
-// НАСТРОЙКИ
-// ==================================================
+/* =====================================================
+   2. НАСТРОЙКИ
+===================================================== */
 
-const TIMES = [
-    "11:00–12:00",
-    "12:00–13:00",
-    "13:00–14:00"
-];
-
+const GROUP_COUNT = 3;
 const MAX_GROUP_SIZE = 6;
-const MAX_ORDINARY_MALES = 2;
 
-const STORAGE_EMPLOYEES = "lunch_employees_v3";
-const STORAGE_SCHEDULES = "lunch_schedules_v3";
-const STORAGE_OLD_HISTORY = "lunch_history";
+const GROUP_TIMES = [
+    "11:00 — 12:00",
+    "12:00 — 13:00",
+    "13:00 — 14:00"
+];
 
 const DEFAULT_EMPLOYEES = [
     { id: "bayel", name: "Байэль", gender: "male" },
     { id: "aizat", name: "Айзат", gender: "male" },
-    { id: "tunuk", name: "Тунук", gender: "female" },
+    { id: "tununuk", name: "Тунунук", gender: "male" },
     { id: "ramazan", name: "Рамазан", gender: "male" },
-    { id: "sanjar", name: "Санжар", gender: "male" },
+    { id: "sanzhar", name: "Санжар", gender: "male" },
     { id: "kursant", name: "Курсант", gender: "male", fixed: true },
     { id: "khan", name: "Хан", gender: "male" },
+
     { id: "asya", name: "Ася", gender: "female" },
     { id: "aiperi", name: "Айпери", gender: "female" },
     { id: "nargiz", name: "Наргиз", gender: "female" },
@@ -65,35 +64,27 @@ const DEFAULT_EMPLOYEES = [
     { id: "aigul", name: "Айгуль", gender: "female" }
 ];
 
-let selectedDate = getDateKey();
-let selectedPersonId = null;
-let cloudReady = false;
-let applyingRemoteData = false;
+const STORAGE_EMPLOYEES = "lunch_employees_v3";
+const STORAGE_SCHEDULES = "lunch_schedules_v3";
+const STORAGE_HISTORY = "lunch_history";
+const STORAGE_LAST_DATE = "lunch_last_date";
 
-let employeeWriteQueue = Promise.resolve();
-let scheduleWriteQueue = Promise.resolve();
+/* =====================================================
+   3. DOM
+===================================================== */
 
-// ==================================================
-// ЭЛЕМЕНТЫ HTML
-// ==================================================
-
-const loadingScreen = document.getElementById("loadingScreen");
-const app = document.getElementById("app");
 const scheduleElement = document.getElementById("schedule");
 const currentDateElement = document.getElementById("currentDate");
-const datePicker = document.getElementById("datePicker");
 
-const previousDayButton = document.getElementById("previousDayButton");
-const nextDayButton = document.getElementById("nextDayButton");
-const todayButton = document.getElementById("todayButton");
 const generateButton = document.getElementById("generateButton");
-
 const settingsButton = document.getElementById("settingsButton");
+
 const settingsModal = document.getElementById("settingsModal");
 const closeSettings = document.getElementById("closeSettings");
+
 const employeeList = document.getElementById("employeeList");
-const employeeName = document.getElementById("employeeName");
-const employeeGender = document.getElementById("employeeGender");
+const employeeNameInput = document.getElementById("employeeName");
+const employeeGenderSelect = document.getElementById("employeeGender");
 const addEmployeeButton = document.getElementById("addEmployeeButton");
 
 const showHistoryButton = document.getElementById("showHistoryButton");
@@ -101,328 +92,26 @@ const historyModal = document.getElementById("historyModal");
 const closeHistory = document.getElementById("closeHistory");
 const historyList = document.getElementById("historyList");
 
-const moveHint = document.getElementById("moveHint");
-const cancelMoveButton = document.getElementById("cancelMoveButton");
+/* =====================================================
+   4. СОСТОЯНИЕ ПРИЛОЖЕНИЯ
+===================================================== */
 
-// ==================================================
-// СОТРУДНИКИ И НОРМАЛИЗАЦИЯ
-// ==================================================
+let employees = [];
+let schedules = [];
+let history = [];
 
-function normalizeName(name) {
-    const original = String(name ?? "").trim();
-    const lower = original.toLocaleLowerCase("ru-RU");
+let draggedEmployeeId = null;
+let selectedEmployee = null;
 
-    if (lower === "тунук" || lower === "тунунук") {
-        return "Тунук";
-    }
+let isUpdatingFromCloud = false;
 
-    return original;
-}
+/* =====================================================
+   5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+===================================================== */
 
-function isRemovedEmployee(person) {
-    const name = normalizeName(person?.name).toLocaleLowerCase("ru-RU");
-    const id = String(person?.id ?? "").toLowerCase();
+function today() {
+    const date = new Date();
 
-    return name === "гулназ" || id === "gulnaz";
-}
-
-function createIdFromName(name) {
-    return normalizeName(name)
-        .toLocaleLowerCase("ru-RU")
-        .replace(/[^a-zа-яё0-9]+/gi, "-")
-        .replace(/^-|-$/g, "");
-}
-
-function normalizePerson(person, index = 0) {
-    const name = normalizeName(person?.name);
-
-    return {
-        id: String(
-            person?.id ||
-            createIdFromName(name) ||
-            `employee-${index}`
-        ),
-        name,
-        gender: person?.gender === "male" ? "male" : "female",
-        fixed: Boolean(person?.fixed || name === "Курсант")
-    };
-}
-
-function cleanEmployees(employees) {
-    if (!Array.isArray(employees)) return [];
-
-    return employees
-        .filter(person => !isRemovedEmployee(person))
-        .map(normalizePerson);
-}
-
-function normalizeSchedule(schedule) {
-    if (
-        !schedule ||
-        typeof schedule.date !== "string" ||
-        !Array.isArray(schedule.groups)
-    ) {
-        return null;
-    }
-
-    return {
-        date: schedule.date,
-        groups: TIMES.map((time, index) => {
-            const group = schedule.groups[index];
-
-            return {
-                time,
-                people: Array.isArray(group?.people)
-                    ? group.people
-                        .filter(person => !isRemovedEmployee(person))
-                        .map(normalizePerson)
-                    : []
-            };
-        })
-    };
-}
-
-// ==================================================
-// ЛОКАЛЬНОЕ ХРАНИЛИЩЕ
-// ==================================================
-
-function getEmployees() {
-    try {
-        const raw = localStorage.getItem(STORAGE_EMPLOYEES);
-
-        if (!raw) {
-            return cleanEmployees(DEFAULT_EMPLOYEES);
-        }
-
-        const employees = JSON.parse(raw);
-
-        if (!Array.isArray(employees)) {
-            throw new Error("Неверный формат списка сотрудников");
-        }
-
-        return cleanEmployees(employees);
-    } catch (error) {
-        console.error("Ошибка чтения сотрудников:", error);
-        return cleanEmployees(DEFAULT_EMPLOYEES);
-    }
-}
-
-function saveEmployees(employees) {
-    const normalized = cleanEmployees(employees);
-
-    localStorage.setItem(
-        STORAGE_EMPLOYEES,
-        JSON.stringify(normalized)
-    );
-
-    if (!cloudReady || applyingRemoteData) return;
-
-    employeeWriteQueue = employeeWriteQueue
-        .then(() => setDoc(EMPLOYEES_DOC, {
-            items: normalized,
-            updatedAt: new Date().toISOString()
-        }))
-        .catch(error => {
-            console.error("Ошибка сохранения сотрудников:", error);
-        });
-}
-
-function getSchedules() {
-    try {
-        const raw = localStorage.getItem(STORAGE_SCHEDULES);
-
-        if (!raw) return [];
-
-        const schedules = JSON.parse(raw);
-
-        if (!Array.isArray(schedules)) return [];
-
-        return schedules
-            .map(normalizeSchedule)
-            .filter(Boolean);
-    } catch (error) {
-        console.error("Ошибка чтения расписаний:", error);
-        return [];
-    }
-}
-
-function saveSchedules(schedules) {
-    const normalized = schedules
-        .map(normalizeSchedule)
-        .filter(Boolean)
-        .sort((a, b) => b.date.localeCompare(a.date))
-        .slice(0, 365);
-
-    localStorage.setItem(
-        STORAGE_SCHEDULES,
-        JSON.stringify(normalized)
-    );
-
-    if (!cloudReady || applyingRemoteData) return;
-
-    scheduleWriteQueue = scheduleWriteQueue
-        .then(() => setDoc(SCHEDULES_DOC, {
-            items: normalized,
-            updatedAt: new Date().toISOString()
-        }))
-        .catch(error => {
-            console.error("Ошибка сохранения расписаний:", error);
-        });
-}
-
-function migrateOldHistory() {
-    if (localStorage.getItem(STORAGE_SCHEDULES)) return;
-
-    const raw = localStorage.getItem(STORAGE_OLD_HISTORY);
-
-    if (!raw) return;
-
-    try {
-        const history = JSON.parse(raw);
-
-        if (Array.isArray(history)) {
-            const schedules = history
-                .map(normalizeSchedule)
-                .filter(Boolean);
-
-            localStorage.setItem(
-                STORAGE_SCHEDULES,
-                JSON.stringify(schedules)
-            );
-        }
-    } catch (error) {
-        console.error("Ошибка переноса старой истории:", error);
-    }
-}
-
-// ==================================================
-// FIREBASE
-// ==================================================
-
-async function loadInitialCloudData() {
-    migrateOldHistory();
-
-    const [employeesSnapshot, schedulesSnapshot] = await Promise.all([
-        getDoc(EMPLOYEES_DOC),
-        getDoc(SCHEDULES_DOC)
-    ]);
-
-    let employees;
-
-    if (
-        employeesSnapshot.exists() &&
-        Array.isArray(employeesSnapshot.data().items)
-    ) {
-        employees = cleanEmployees(employeesSnapshot.data().items);
-    } else {
-        employees = cleanEmployees(DEFAULT_EMPLOYEES);
-    }
-
-    // Сразу сохраняем очищенный список в Firebase.
-    await setDoc(EMPLOYEES_DOC, {
-        items: employees,
-        updatedAt: new Date().toISOString()
-    });
-
-    localStorage.setItem(
-        STORAGE_EMPLOYEES,
-        JSON.stringify(employees)
-    );
-
-    if (
-        schedulesSnapshot.exists() &&
-        Array.isArray(schedulesSnapshot.data().items)
-    ) {
-        const schedules = schedulesSnapshot.data().items
-            .map(normalizeSchedule)
-            .filter(Boolean);
-
-        localStorage.setItem(
-            STORAGE_SCHEDULES,
-            JSON.stringify(schedules)
-        );
-    } else {
-        await setDoc(SCHEDULES_DOC, {
-            items: getSchedules(),
-            updatedAt: new Date().toISOString()
-        });
-    }
-
-    cloudReady = true;
-}
-
-function startCloudListeners() {
-    onSnapshot(EMPLOYEES_DOC, snapshot => {
-        if (
-            !snapshot.exists() ||
-            !Array.isArray(snapshot.data().items)
-        ) {
-            return;
-        }
-
-        const employees = cleanEmployees(snapshot.data().items);
-
-        applyingRemoteData = true;
-
-        localStorage.setItem(
-            STORAGE_EMPLOYEES,
-            JSON.stringify(employees)
-        );
-
-        applyingRemoteData = false;
-
-        if (!settingsModal.classList.contains("hidden")) {
-            renderEmployees();
-        }
-    }, error => {
-        console.error("Ошибка синхронизации сотрудников:", error);
-    });
-
-    onSnapshot(SCHEDULES_DOC, snapshot => {
-        if (
-            !snapshot.exists() ||
-            !Array.isArray(snapshot.data().items)
-        ) {
-            return;
-        }
-
-        const schedules = snapshot.data().items
-            .map(normalizeSchedule)
-            .filter(Boolean);
-
-        applyingRemoteData = true;
-
-        localStorage.setItem(
-            STORAGE_SCHEDULES,
-            JSON.stringify(schedules)
-        );
-
-        applyingRemoteData = false;
-
-        const current = schedules.find(
-            schedule => schedule.date === selectedDate
-        );
-
-        if (current && scheduleMatchesEmployees(current)) {
-            renderSchedule(current);
-        } else {
-            const updated = ensureScheduleChain(selectedDate);
-            if (updated) renderSchedule(updated);
-        }
-
-        if (!historyModal.classList.contains("hidden")) {
-            renderHistory();
-        }
-    }, error => {
-        console.error("Ошибка синхронизации расписания:", error);
-    });
-}
-
-// ==================================================
-// ДАТЫ
-// ==================================================
-
-function getDateKey(date = new Date()) {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
     const day = String(date.getDate()).padStart(2, "0");
@@ -430,1122 +119,1100 @@ function getDateKey(date = new Date()) {
     return `${year}-${month}-${day}`;
 }
 
-function dateFromKey(key) {
-    return new Date(`${key}T12:00:00`);
+function formatDate(dateString) {
+    if (!dateString) return "";
+
+    const [year, month, day] = dateString.split("-");
+
+    return `${day}.${month}.${year}`;
 }
 
-function formatDate(key) {
-    return new Intl.DateTimeFormat("ru-RU", {
-        day: "numeric",
-        month: "long",
-        year: "numeric"
-    }).format(dateFromKey(key));
+function createId() {
+    return `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
-
-function addDays(key, amount) {
-    const date = dateFromKey(key);
-    date.setDate(date.getDate() + amount);
-
-    return getDateKey(date);
-}
-
-function updateDateUI() {
-    currentDateElement.textContent = formatDate(selectedDate);
-    datePicker.value = selectedDate;
-}
-
-// ==================================================
-// ОБЩИЕ ФУНКЦИИ
-// ==================================================
 
 function shuffle(array) {
     const result = [...array];
 
     for (let i = result.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
+
         [result[i], result[j]] = [result[j], result[i]];
     }
 
     return result;
 }
 
-function findSchedule(date) {
-    return getSchedules().find(schedule => schedule.date === date);
+function isGulnaz(employee) {
+    if (!employee) return false;
+
+    return (
+        employee.id === "gulnaz" ||
+        String(employee.name || "").trim().toLowerCase() === "гулназ"
+    );
 }
 
-function findPersonInGroups(groups, name) {
-    for (const group of groups) {
-        const person = group.people.find(
-            item => normalizeName(item.name) === name
+function cleanEmployees(list) {
+    if (!Array.isArray(list)) return [];
+
+    const unique = new Map();
+
+    list.forEach(employee => {
+        if (!employee || !employee.name || isGulnaz(employee)) return;
+
+        const id = employee.id || createId();
+
+        unique.set(id, {
+            id,
+            name: String(employee.name).trim(),
+            gender: employee.gender === "male" ? "male" : "female",
+            fixed: id === "kursant" || employee.fixed === true
+        });
+    });
+
+    return [...unique.values()];
+}
+
+function getEmployeeById(id) {
+    return employees.find(employee => employee.id === id);
+}
+
+function getEmployeeIds(schedule) {
+    if (!schedule || !Array.isArray(schedule.groups)) return [];
+
+    return schedule.groups.flatMap(group =>
+        (group.people || []).map(person =>
+            typeof person === "string" ? person : person.id
+        )
+    );
+}
+
+function normalizeSchedule(schedule) {
+    if (!schedule || !Array.isArray(schedule.groups)) return null;
+
+    const groups = schedule.groups.map((group, index) => ({
+        time: GROUP_TIMES[index],
+        people: (group.people || [])
+            .map(person => {
+                const id = typeof person === "string" ? person : person.id;
+                return employees.find(employee => employee.id === id);
+            })
+            .filter(Boolean)
+            .filter(person => !isGulnaz(person))
+            .map(person => person.id)
+    }));
+
+    while (groups.length < GROUP_COUNT) {
+        groups.push({
+            time: GROUP_TIMES[groups.length],
+            people: []
+        });
+    }
+
+    return {
+        date: schedule.date || today(),
+        groups: groups.slice(0, GROUP_COUNT)
+    };
+}
+
+function saveLocalData() {
+    localStorage.setItem(STORAGE_EMPLOYEES, JSON.stringify(employees));
+    localStorage.setItem(STORAGE_SCHEDULES, JSON.stringify(schedules));
+    localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history));
+}
+
+function loadLocalData() {
+    try {
+        employees = cleanEmployees(
+            JSON.parse(localStorage.getItem(STORAGE_EMPLOYEES)) || []
         );
 
-        if (person) return person;
+        schedules = JSON.parse(
+            localStorage.getItem(STORAGE_SCHEDULES)
+        ) || [];
+
+        history = JSON.parse(
+            localStorage.getItem(STORAGE_HISTORY)
+        ) || [];
+
+        schedules = schedules
+            .map(normalizeSchedule)
+            .filter(Boolean);
+
+        history = history
+            .map(normalizeSchedule)
+            .filter(Boolean);
+
+    } catch (error) {
+        console.error("Ошибка чтения локальных данных:", error);
+
+        employees = [];
+        schedules = [];
+        history = [];
     }
-
-    return null;
 }
 
-function countOrdinaryMales(people) {
-    return people.filter(person =>
-        person.gender === "male" &&
-        normalizeName(person.name) !== "Курсант"
-    ).length;
-}
+/* =====================================================
+   6. FIREBASE: ЗАГРУЗКА И СОХРАНЕНИЕ
+===================================================== */
 
-// ==================================================
-// РАЗМЕРЫ ГРУПП
-// 17 человек = 6 / 6 / 5
-// ==================================================
-
-function getGroupSizes(employeeCount) {
-    const base = Math.floor(employeeCount / 3);
-    const remainder = employeeCount % 3;
-
-    return [
-        base + (remainder > 0 ? 1 : 0),
-        base + (remainder > 1 ? 1 : 0),
-        base
-    ];
-}
-
-function scheduleMatchesEmployees(schedule) {
-    if (!schedule || !Array.isArray(schedule.groups)) {
-        return false;
+async function saveEmployeesToCloud() {
+    try {
+        await setDoc(employeesRef, {
+            items: employees,
+            updatedAt: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error("Ошибка сохранения сотрудников:", error);
     }
+}
 
-    const employees = getEmployees();
-    const sizes = getGroupSizes(employees.length);
+async function saveSchedulesToCloud() {
+    try {
+        await setDoc(schedulesRef, {
+            items: schedules,
+            history,
+            updatedAt: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error("Ошибка сохранения расписания:", error);
+    }
+}
 
-    if (employees.length === 0) return false;
+async function loadInitialCloudData() {
+    try {
+        const employeesSnapshot = await getDoc(employeesRef);
+        const schedulesSnapshot = await getDoc(schedulesRef);
 
-    if (schedule.groups.length !== 3) return false;
+        if (employeesSnapshot.exists()) {
+            const cloudEmployees = employeesSnapshot.data().items || [];
 
-    const schedulePeople = schedule.groups.flatMap(
-        group => group.people
+            employees = cleanEmployees(cloudEmployees);
+        } else if (employees.length === 0) {
+            employees = [...DEFAULT_EMPLOYEES];
+        }
+
+        if (schedulesSnapshot.exists()) {
+            const data = schedulesSnapshot.data();
+
+            schedules = (data.items || [])
+                .map(normalizeSchedule)
+                .filter(Boolean);
+
+            history = (data.history || [])
+                .map(normalizeSchedule)
+                .filter(Boolean);
+        }
+
+        saveLocalData();
+
+        // Записываем очищенный список обратно в Firebase.
+        await saveEmployeesToCloud();
+        await saveSchedulesToCloud();
+
+        renderEmployees();
+        checkDailySchedule();
+
+    } catch (error) {
+        console.error("Firebase недоступен:", error);
+
+        if (employees.length === 0) {
+            employees = [...DEFAULT_EMPLOYEES];
+        }
+
+        renderEmployees();
+        checkDailySchedule();
+    }
+}
+
+/* =====================================================
+   7. РАСПРЕДЕЛЕНИЕ СОТРУДНИКОВ
+===================================================== */
+
+function getGroupSizes(total) {
+    const base = Math.floor(total / GROUP_COUNT);
+    const remainder = total % GROUP_COUNT;
+
+    return Array.from({ length: GROUP_COUNT }, (_, index) =>
+        base + (index < remainder ? 1 : 0)
     );
-
-    const scheduleIds = schedulePeople.map(person => person.id);
-    const employeeIds = employees.map(person => person.id);
-
-    if (scheduleIds.length !== employeeIds.length) return false;
-
-    if (new Set(scheduleIds).size !== scheduleIds.length) {
-        return false;
-    }
-
-    if (!employeeIds.every(id => scheduleIds.includes(id))) {
-        return false;
-    }
-
-    if (
-        schedule.groups.some(
-            (group, index) => group.people.length !== sizes[index]
-        )
-    ) {
-        return false;
-    }
-
-    if (
-        schedule.groups.some(
-            group => countOrdinaryMales(group.people) > MAX_ORDINARY_MALES
-        )
-    ) {
-        return false;
-    }
-
-    const kursantGroup = schedule.groups[2].people.some(
-        person => normalizeName(person.name) === "Курсант"
-    );
-
-    return kursantGroup;
 }
 
-// ==================================================
-// СОЗДАНИЕ ПЕРВИЧНОГО РАСПИСАНИЯ
-// ==================================================
-
-function createInitialSchedule(date) {
-    const employees = shuffle(getEmployees());
-
-    if (employees.length < 3 || employees.length > 18) {
-        alert(
-            `Для автоматического расписания нужно от 3 до 18 сотрудников.\nСейчас: ${employees.length}`
-        );
+function createInitialSchedule() {
+    if (employees.length < GROUP_COUNT) {
         return null;
     }
 
     const sizes = getGroupSizes(employees.length);
 
     if (sizes.some(size => size > MAX_GROUP_SIZE)) {
-        alert("В одной группе не может быть больше 6 человек.");
+        alert("Для расписания нужно не более 18 сотрудников.");
         return null;
     }
 
-    const kursant = employees.find(
-        person => normalizeName(person.name) === "Курсант"
+    const kursant = employees.find(employee => employee.id === "kursant");
+
+    const ordinaryEmployees = shuffle(
+        employees.filter(employee => employee.id !== "kursant")
     );
 
-    if (!kursant) {
-        alert("В списке сотрудников должен быть Курсант.");
-        return null;
-    }
-
-    const ordinaryMales = shuffle(
-        employees.filter(person =>
-            person.gender === "male" &&
-            person.id !== kursant.id
-        )
-    );
-
-    const females = shuffle(
-        employees.filter(person =>
-            person.gender === "female"
-        )
-    );
-
-    if (ordinaryMales.length > MAX_ORDINARY_MALES * 3) {
-        alert("Слишком много парней для текущего ограничения.");
-        return null;
-    }
-
-    const groups = [[], [], []];
-
-    // Курсант всегда в третьей группе.
-    groups[2].push(kursant);
-
-    // Распределяем обычных парней равномерно.
-    for (const person of ordinaryMales) {
-        const available = groups
-            .map((group, index) => ({
-                group,
-                index
-            }))
-            .filter(item =>
-                item.group.length < sizes[item.index] &&
-                countOrdinaryMales(item.group) < MAX_ORDINARY_MALES
-            );
-
-        if (!available.length) {
-            alert("Невозможно распределить парней по группам.");
-            return null;
-        }
-
-        available.sort((a, b) => {
-            const maleDifference =
-                countOrdinaryMales(a.group) -
-                countOrdinaryMales(b.group);
-
-            if (maleDifference !== 0) return maleDifference;
-
-            return a.group.length - b.group.length;
-        });
-
-        available[0].group.push(person);
-    }
-
-    // Заполняем оставшиеся места девушками.
-    for (const person of females) {
-        const available = groups
-            .map((group, index) => ({
-                group,
-                index
-            }))
-            .filter(item =>
-                item.group.length < sizes[item.index]
-            );
-
-        if (!available.length) break;
-
-        available.sort((a, b) =>
-            a.group.length - b.group.length
-        );
-
-        const smallestSize = available[0].group.length;
-
-        const smallestGroups = available.filter(
-            item => item.group.length === smallestSize
-        );
-
-        const selected = smallestGroups[
-            Math.floor(Math.random() * smallestGroups.length)
-        ];
-
-        selected.group.push(person);
-    }
-
-    if (
-        groups.some(
-            (group, index) => group.length !== sizes[index]
-        )
-    ) {
-        alert("Не удалось сформировать все группы.");
-        return null;
-    }
-
-    if (
-        groups.some(
-            group => countOrdinaryMales(group) > MAX_ORDINARY_MALES
-        )
-    ) {
-        alert("Не удалось соблюсти ограничение по количеству парней.");
-        return null;
-    }
-
-    return {
-        date,
-        groups: groups.map((people, index) => ({
-            time: TIMES[index],
-            people: shuffle(people)
-        }))
-    };
-}
-
-// ==================================================
-// РОТАЦИЯ МЕЖДУ ДНЯМИ
-// ==================================================
-
-function createNextDaySchedule(previousSchedule, newDate) {
-    const employees = getEmployees();
-
-    // Если состав сотрудников изменился — создаём новое расписание.
-    if (!scheduleMatchesEmployees(previousSchedule)) {
-        return createInitialSchedule(newDate);
-    }
-
-    const oldGroups = previousSchedule.groups;
-    const sizes = getGroupSizes(employees.length);
-
-    const oldGroup1 = [...oldGroups[0].people];
-    const oldGroup2 = [...oldGroups[1].people];
-
-    const oldGroup3 = oldGroups[2].people.filter(
-        person => normalizeName(person.name) !== "Курсант"
-    );
-
-    const kursant = findPersonInGroups(oldGroups, "Курсант");
-
-    if (!kursant) {
-        return createInitialSchedule(newDate);
-    }
-
-    // Новая первая группа получает сотрудников из третьей.
-    const newGroup1 = [...oldGroup3];
-
-    // Новая вторая группа получает сотрудников из первой.
-    const newGroup2 = [...oldGroup1];
-
-    // Новая третья группа получает сотрудников из второй.
-    const newGroup3 = [...oldGroup2];
-
-    // Курсант остаётся в третьей группе.
-    newGroup3.push(kursant);
-
-    // При составе 17 человек нужно переместить двух сотрудников
-    // из новой третьей группы в новую первую.
-    const needed = sizes[0] - newGroup1.length;
-
-    if (needed > 0) {
-        const candidates = shuffle([...newGroup3].filter(
-            person => normalizeName(person.name) !== "Курсант"
-        ));
-
-        // Сначала рассматриваем девушек, чтобы не нарушать
-        // ограничение по количеству парней.
-        candidates.sort((a, b) => {
-            if (a.gender === "female" && b.gender === "male") return -1;
-            if (a.gender === "male" && b.gender === "female") return 1;
-            return 0;
-        });
-
-        let selected = null;
-
-        function findTransfer(startIndex, chosen) {
-            if (chosen.length === needed) {
-                const chosenIds = new Set(
-                    chosen.map(person => person.id)
-                );
-
-                const testGroup1 = [...newGroup1, ...chosen];
-
-                const testGroup3 = newGroup3.filter(
-                    person => !chosenIds.has(person.id)
-                );
-
-                if (
-                    testGroup1.length === sizes[0] &&
-                    testGroup3.length === sizes[2] &&
-                    countOrdinaryMales(testGroup1) <= MAX_ORDINARY_MALES &&
-                    countOrdinaryMales(testGroup3) <= MAX_ORDINARY_MALES
-                ) {
-                    selected = [...chosen];
-                    return true;
-                }
-
-                return false;
-            }
-
-            for (let i = startIndex; i < candidates.length; i++) {
-                chosen.push(candidates[i]);
-
-                if (findTransfer(i + 1, chosen)) {
-                    return true;
-                }
-
-                chosen.pop();
-            }
-
-            return false;
-        }
-
-        if (!findTransfer(0, [])) {
-            return createInitialSchedule(newDate);
-        }
-
-        const selectedIds = new Set(
-            selected.map(person => person.id)
-        );
-
-        newGroup1.push(...selected);
-
-        for (let i = newGroup3.length - 1; i >= 0; i--) {
-            if (selectedIds.has(newGroup3[i].id)) {
-                newGroup3.splice(i, 1);
-            }
-        }
-    }
-
-    const allGroups = [
-        newGroup1,
-        newGroup2,
-        newGroup3
+    const groups = [
+        { time: GROUP_TIMES[0], people: [] },
+        { time: GROUP_TIMES[1], people: [] },
+        { time: GROUP_TIMES[2], people: [] }
     ];
 
-    const invalid = allGroups.some((group, index) =>
-        group.length !== sizes[index] ||
-        countOrdinaryMales(group) > MAX_ORDINARY_MALES
-    );
-
-    if (invalid) {
-        return createInitialSchedule(newDate);
+    // Курсант всегда находится в третьей группе.
+    if (kursant) {
+        groups[2].people.push(kursant.id);
     }
 
-    return {
-        date: newDate,
-        groups: allGroups.map((people, index) => ({
-            time: TIMES[index],
-            people: shuffle(people)
-        }))
-    };
-}
+    let remaining = [...ordinaryEmployees];
 
-// ==================================================
-// СОХРАНЕНИЕ РАСПИСАНИЯ
-// ==================================================
+    // Сначала стараемся распределить мужчин равномерно.
+    for (let groupIndex = 0; groupIndex < GROUP_COUNT; groupIndex++) {
+        const requiredMen = Math.min(
+            2,
+            sizes[groupIndex] - groups[groupIndex].people.length
+        );
 
-function saveSchedule(schedule) {
-    if (!schedule) return;
+        for (let i = 0; i < requiredMen; i++) {
+            const maleIndex = remaining.findIndex(
+                employee => employee.gender === "male"
+            );
 
-    const schedules = getSchedules().filter(
-        item => item.date !== schedule.date
-    );
+            if (maleIndex === -1) break;
 
-    schedules.push(schedule);
-    saveSchedules(schedules);
-}
+            const [male] = remaining.splice(maleIndex, 1);
 
-function ensureSchedule(date) {
-    const existing = findSchedule(date);
-
-    if (existing && scheduleMatchesEmployees(existing)) {
-        return existing;
-    }
-
-    const previous = findSchedule(addDays(date, -1));
-
-    let schedule;
-
-    if (previous && scheduleMatchesEmployees(previous)) {
-        schedule = createNextDaySchedule(previous, date);
-    } else {
-        schedule = createInitialSchedule(date);
-    }
-
-    if (schedule) saveSchedule(schedule);
-
-    return schedule;
-}
-
-function ensureScheduleChain(targetDate) {
-    const existing = findSchedule(targetDate);
-
-    if (existing && scheduleMatchesEmployees(existing)) {
-        return existing;
-    }
-
-    const earlier = getSchedules()
-        .filter(schedule =>
-            schedule.date < targetDate &&
-            scheduleMatchesEmployees(schedule)
-        )
-        .sort((a, b) => b.date.localeCompare(a.date));
-
-    if (!earlier.length) {
-        return ensureSchedule(targetDate);
-    }
-
-    let current = earlier[0];
-
-    while (current.date < targetDate) {
-        const nextDate = addDays(current.date, 1);
-        const existingNext = findSchedule(nextDate);
-
-        if (
-            existingNext &&
-            scheduleMatchesEmployees(existingNext)
-        ) {
-            current = existingNext;
-        } else {
-            const next = createNextDaySchedule(current, nextDate);
-
-            if (!next) return null;
-
-            saveSchedule(next);
-            current = next;
+            groups[groupIndex].people.push(male.id);
         }
     }
 
-    return current;
+    // Заполняем оставшиеся места.
+    for (let groupIndex = 0; groupIndex < GROUP_COUNT; groupIndex++) {
+        while (groups[groupIndex].people.length < sizes[groupIndex]) {
+            if (remaining.length === 0) break;
+
+            groups[groupIndex].people.push(remaining.shift().id);
+        }
+    }
+
+    if (remaining.length > 0) {
+        return null;
+    }
+
+    return {
+        date: today(),
+        groups
+    };
 }
 
-function openDate(date) {
-    selectedDate = date;
-    updateDateUI();
+/* =====================================================
+   8. ПРОВЕРКА И РОТАЦИЯ ПО ДНЯМ
+===================================================== */
 
-    const schedule = ensureScheduleChain(date);
+function scheduleMatchesEmployees(schedule) {
+    if (!schedule) return false;
+
+    const ids = getEmployeeIds(schedule);
+    const currentIds = employees.map(employee => employee.id);
+
+    if (ids.length !== employees.length) return false;
+
+    if (new Set(ids).size !== ids.length) return false;
+
+    return currentIds.every(id => ids.includes(id));
+}
+
+function rotateSchedule(previousSchedule) {
+    if (!previousSchedule || employees.length < GROUP_COUNT) {
+        return createInitialSchedule();
+    }
+
+    const previousGroups = previousSchedule.groups || [];
+
+    const previousIds = new Set(getEmployeeIds(previousSchedule));
+
+    const currentIds = new Set(employees.map(employee => employee.id));
+
+    const allPreviousEmployeesPresent = [...currentIds].every(id =>
+        previousIds.has(id)
+    );
+
+    if (!allPreviousEmployeesPresent || previousIds.size !== employees.length) {
+        return createInitialSchedule();
+    }
+
+    const sizes = getGroupSizes(employees.length);
+
+    const newGroups = [
+        { time: GROUP_TIMES[0], people: [...(previousGroups[1]?.people || [])] },
+        { time: GROUP_TIMES[1], people: [...(previousGroups[2]?.people || [])] },
+        { time: GROUP_TIMES[2], people: [...(previousGroups[0]?.people || [])] }
+    ];
+
+    // Удаляем возможные дубликаты.
+    newGroups.forEach(group => {
+        group.people = [...new Set(group.people)]
+            .filter(id => currentIds.has(id));
+    });
+
+    // Курсант закреплён в третьей группе.
+    newGroups.forEach(group => {
+        group.people = group.people.filter(id => id !== "kursant");
+    });
+
+    const kursant = employees.find(employee => employee.id === "kursant");
+
+    if (kursant) {
+        newGroups[2].people.push(kursant.id);
+    }
+
+    // Балансируем размеры групп, перемещая сотрудников.
+    for (let targetIndex = 0; targetIndex < GROUP_COUNT; targetIndex++) {
+        while (newGroups[targetIndex].people.length > sizes[targetIndex]) {
+            let sourceIndex = GROUP_COUNT - 1;
+
+            while (
+                sourceIndex >= 0 &&
+                (
+                    sourceIndex === targetIndex ||
+                    newGroups[sourceIndex].people.length <= sizes[sourceIndex] ||
+                    newGroups[sourceIndex].people.includes("kursant") &&
+                    sourceIndex === 2 &&
+                    newGroups[sourceIndex].people.length === 1
+                )
+            ) {
+                sourceIndex--;
+            }
+
+            if (sourceIndex < 0) break;
+
+            const movableIndex = newGroups[sourceIndex].people.findIndex(
+                id => id !== "kursant"
+            );
+
+            if (movableIndex === -1) break;
+
+            const [movedId] = newGroups[sourceIndex].people.splice(
+                movableIndex,
+                1
+            );
+
+            newGroups[targetIndex].people.push(movedId);
+        }
+    }
+
+    for (let targetIndex = 0; targetIndex < GROUP_COUNT; targetIndex++) {
+        while (newGroups[targetIndex].people.length < sizes[targetIndex]) {
+            const sourceIndex = newGroups.findIndex((group, index) =>
+                index !== targetIndex &&
+                group.people.length > sizes[index]
+            );
+
+            if (sourceIndex === -1) break;
+
+            const movableIndex = newGroups[sourceIndex].people.findIndex(
+                id => id !== "kursant"
+            );
+
+            if (movableIndex === -1) break;
+
+            const [movedId] = newGroups[sourceIndex].people.splice(
+                movableIndex,
+                1
+            );
+
+            newGroups[targetIndex].people.push(movedId);
+        }
+    }
+
+    const result = {
+        date: today(),
+        groups: newGroups
+    };
+
+    const allIds = result.groups.flatMap(group => group.people);
+
+    const valid =
+        allIds.length === employees.length &&
+        new Set(allIds).size === employees.length &&
+        employees.every(employee => allIds.includes(employee.id)) &&
+        result.groups.every((group, index) =>
+            group.people.length === sizes[index]
+        );
+
+    return valid ? result : createInitialSchedule();
+}
+
+function checkDailySchedule() {
+    const currentDate = today();
+
+    let currentSchedule = schedules.find(
+        schedule => schedule.date === currentDate
+    );
+
+    if (currentSchedule && scheduleMatchesEmployees(currentSchedule)) {
+        renderSchedule(currentSchedule);
+        updateDate();
+        return;
+    }
+
+    const previousSchedule = [...schedules]
+        .filter(schedule => schedule.date < currentDate)
+        .sort((a, b) => b.date.localeCompare(a.date))[0];
+
+    if (currentSchedule) {
+        schedules = schedules.filter(
+            schedule => schedule.date !== currentDate
+        );
+    }
+
+    if (previousSchedule) {
+        history.unshift(previousSchedule);
+    }
+
+    const newSchedule = previousSchedule
+        ? rotateSchedule(previousSchedule)
+        : createInitialSchedule();
+
+    if (!newSchedule) {
+        renderEmptySchedule();
+        return;
+    }
+
+    schedules = schedules.filter(
+        schedule => schedule.date !== currentDate
+    );
+
+    schedules.push(newSchedule);
+
+    saveLocalData();
+    saveSchedulesToCloud();
+
+    renderSchedule(newSchedule);
+    updateDate();
+}
+
+/* =====================================================
+   9. ОТОБРАЖЕНИЕ РАСПИСАНИЯ
+===================================================== */
+
+function renderEmptySchedule() {
+    if (!scheduleElement) return;
+
+    scheduleElement.innerHTML = `
+        <div class="empty-schedule">
+            <p>Недостаточно сотрудников для формирования расписания.</p>
+            <p>Добавьте минимум 3 сотрудников.</p>
+        </div>
+    `;
+}
+
+function renderSchedule(schedule) {
+    if (!scheduleElement) return;
+
+    scheduleElement.innerHTML = "";
+
+    schedule.groups.forEach((group, groupIndex) => {
+        const groupElement = document.createElement("div");
+
+        groupElement.className = "lunch-group";
+        groupElement.dataset.group = groupIndex;
+
+        const title = document.createElement("div");
+        title.className = "group-header";
+
+        title.innerHTML = `
+            <div class="group-number">0${groupIndex + 1}</div>
+            <div class="group-info">
+                <h3>${GROUP_TIMES[groupIndex]}</h3>
+                <span>${group.people.length} сотрудников</span>
+            </div>
+        `;
+
+        const peopleContainer = document.createElement("div");
+        peopleContainer.className = "group-people";
+        peopleContainer.dataset.group = groupIndex;
+
+        peopleContainer.addEventListener("dragover", event => {
+            event.preventDefault();
+            peopleContainer.classList.add("drag-over");
+        });
+
+        peopleContainer.addEventListener("dragleave", () => {
+            peopleContainer.classList.remove("drag-over");
+        });
+
+        peopleContainer.addEventListener("drop", event => {
+            event.preventDefault();
+            peopleContainer.classList.remove("drag-over");
+
+            const targetGroup = Number(peopleContainer.dataset.group);
+
+            if (draggedEmployeeId) {
+                moveEmployee(draggedEmployeeId, targetGroup);
+                draggedEmployeeId = null;
+            }
+        });
+
+        group.people.forEach(employeeId => {
+            const employee = getEmployeeById(employeeId);
+
+            if (!employee) return;
+
+            const personElement = document.createElement("div");
+
+            personElement.className = "employee-card";
+            personElement.draggable = employee.id !== "kursant";
+            personElement.dataset.employeeId = employee.id;
+
+            personElement.innerHTML = `
+                <span class="employee-dot ${employee.gender}"></span>
+                <span class="employee-card-name"></span>
+                ${employee.id === "kursant"
+                    ? '<span class="fixed-label">FIX</span>'
+                    : ""}
+            `;
+
+            personElement.querySelector(".employee-card-name").textContent =
+                employee.name;
+
+            personElement.addEventListener("dragstart", () => {
+                draggedEmployeeId = employee.id;
+            });
+
+            personElement.addEventListener("dragend", () => {
+                draggedEmployeeId = null;
+            });
+
+            personElement.addEventListener("click", () => {
+                handleEmployeeClick(employee.id);
+            });
+
+            peopleContainer.appendChild(personElement);
+        });
+
+        groupElement.appendChild(title);
+        groupElement.appendChild(peopleContainer);
+
+        scheduleElement.appendChild(groupElement);
+    });
+}
+
+function updateDate() {
+    if (!currentDateElement) return;
+
+    currentDateElement.textContent = formatDate(today());
+}
+
+/* =====================================================
+   10. ПЕРЕНОС СОТРУДНИКОВ МЕЖДУ ГРУППАМИ
+===================================================== */
+
+function handleEmployeeClick(employeeId) {
+    if (employeeId === "kursant") return;
+
+    if (!selectedEmployee) {
+        selectedEmployee = employeeId;
+
+        document.querySelectorAll(".employee-card").forEach(card => {
+            card.classList.toggle(
+                "selected",
+                card.dataset.employeeId === employeeId
+            );
+        });
+
+        return;
+    }
+
+    if (selectedEmployee === employeeId) {
+        selectedEmployee = null;
+        renderCurrentSchedule();
+        return;
+    }
+
+    const first = selectedEmployee;
+    const second = employeeId;
+
+    selectedEmployee = null;
+
+    swapEmployees(first, second);
+}
+
+function moveEmployee(employeeId, targetGroupIndex) {
+    const schedule = getCurrentSchedule();
+
+    if (!schedule || employeeId === "kursant") return;
+
+    const sourceGroupIndex = schedule.groups.findIndex(group =>
+        group.people.includes(employeeId)
+    );
+
+    if (sourceGroupIndex === -1 || sourceGroupIndex === targetGroupIndex) {
+        return;
+    }
+
+    const targetGroup = schedule.groups[targetGroupIndex];
+
+    if (targetGroup.people.length >= MAX_GROUP_SIZE) {
+        alert("В этой группе уже 6 сотрудников.");
+        return;
+    }
+
+    schedule.groups[sourceGroupIndex].people =
+        schedule.groups[sourceGroupIndex].people.filter(
+            id => id !== employeeId
+        );
+
+    targetGroup.people.push(employeeId);
+
+    saveCurrentSchedule(schedule);
+}
+
+function swapEmployees(firstId, secondId) {
+    const schedule = getCurrentSchedule();
+
+    if (!schedule) return;
+
+    if (firstId === "kursant" || secondId === "kursant") {
+        renderCurrentSchedule();
+        return;
+    }
+
+    const firstGroupIndex = schedule.groups.findIndex(group =>
+        group.people.includes(firstId)
+    );
+
+    const secondGroupIndex = schedule.groups.findIndex(group =>
+        group.people.includes(secondId)
+    );
+
+    if (firstGroupIndex === -1 || secondGroupIndex === -1) return;
+
+    if (firstGroupIndex === secondGroupIndex) {
+        renderCurrentSchedule();
+        return;
+    }
+
+    const firstPeople = schedule.groups[firstGroupIndex].people;
+    const secondPeople = schedule.groups[secondGroupIndex].people;
+
+    firstPeople[firstPeople.indexOf(firstId)] = secondId;
+    secondPeople[secondPeople.indexOf(secondId)] = firstId;
+
+    saveCurrentSchedule(schedule);
+}
+
+function getCurrentSchedule() {
+    return schedules.find(schedule => schedule.date === today());
+}
+
+function renderCurrentSchedule() {
+    const schedule = getCurrentSchedule();
 
     if (schedule) {
         renderSchedule(schedule);
     }
-
-    clearSelection();
 }
 
-// ==================================================
-// ПЕРЕСТАНОВКА СОТРУДНИКОВ
-// ==================================================
-
-function swapPeople(firstId, secondId) {
-    if (firstId === secondId) return;
-
-    const schedule = findSchedule(selectedDate);
-
-    if (!schedule) return;
-
-    let firstGroupIndex = -1;
-    let secondGroupIndex = -1;
-    let firstPersonIndex = -1;
-    let secondPersonIndex = -1;
-
-    schedule.groups.forEach((group, groupIndex) => {
-        group.people.forEach((person, personIndex) => {
-            if (person.id === firstId) {
-                firstGroupIndex = groupIndex;
-                firstPersonIndex = personIndex;
-            }
-
-            if (person.id === secondId) {
-                secondGroupIndex = groupIndex;
-                secondPersonIndex = personIndex;
-            }
-        });
-    });
-
-    if (firstGroupIndex < 0 || secondGroupIndex < 0) return;
-
-    if (firstGroupIndex === secondGroupIndex) {
-        clearSelection();
-        return;
-    }
-
-    const firstPerson =
-        schedule.groups[firstGroupIndex].people[firstPersonIndex];
-
-    const secondPerson =
-        schedule.groups[secondGroupIndex].people[secondPersonIndex];
-
-    if (
-        normalizeName(firstPerson.name) === "Курсант" ||
-        normalizeName(secondPerson.name) === "Курсант"
-    ) {
-        alert("Курсант должен оставаться в группе 13:00–14:00.");
-        clearSelection();
-        return;
-    }
-
-    const firstGroup = [...schedule.groups[firstGroupIndex].people];
-    const secondGroup = [...schedule.groups[secondGroupIndex].people];
-
-    firstGroup[firstPersonIndex] = secondPerson;
-    secondGroup[secondPersonIndex] = firstPerson;
-
-    if (
-        countOrdinaryMales(firstGroup) > MAX_ORDINARY_MALES ||
-        countOrdinaryMales(secondGroup) > MAX_ORDINARY_MALES
-    ) {
-        alert("В каждой группе может быть не больше 2 обычных парней.");
-        clearSelection();
-        return;
-    }
-
-    schedule.groups[firstGroupIndex].people[firstPersonIndex] = secondPerson;
-    schedule.groups[secondGroupIndex].people[secondPersonIndex] = firstPerson;
-
-    saveSchedule(schedule);
-    renderSchedule(schedule);
-    clearSelection();
-}
-
-function selectPerson(personId) {
-    if (selectedPersonId === null) {
-        selectedPersonId = personId;
-        updateSelectedUI();
-        moveHint.hidden = false;
-        return;
-    }
-
-    if (selectedPersonId === personId) {
-        clearSelection();
-        return;
-    }
-
-    swapPeople(selectedPersonId, personId);
-}
-
-function updateSelectedUI() {
-    document.querySelectorAll(".person").forEach(element => {
-        element.classList.toggle(
-            "selected",
-            element.dataset.personId === selectedPersonId
-        );
-    });
-}
-
-function clearSelection() {
-    selectedPersonId = null;
-    moveHint.hidden = true;
-
-    document.querySelectorAll(".person.selected").forEach(element => {
-        element.classList.remove("selected");
-    });
-}
-
-// ==================================================
-// DRAG & DROP
-// ==================================================
-
-function setupDrag(element) {
-    element.addEventListener("dragstart", event => {
-        selectedPersonId = element.dataset.personId;
-
-        element.classList.add("dragging");
-
-        event.dataTransfer.setData(
-            "text/plain",
-            selectedPersonId
-        );
-
-        event.dataTransfer.effectAllowed = "move";
-    });
-
-    element.addEventListener("dragend", () => {
-        element.classList.remove("dragging");
-
-        document.querySelectorAll(".drop-active").forEach(item => {
-            item.classList.remove("drop-active");
-        });
-
-        clearSelection();
-    });
-
-    element.addEventListener("dragover", event => {
-        event.preventDefault();
-        element.classList.add("selected");
-    });
-
-    element.addEventListener("dragleave", () => {
-        element.classList.remove("selected");
-    });
-
-    element.addEventListener("drop", event => {
-        event.preventDefault();
-
-        const draggedId = event.dataTransfer.getData("text/plain");
-        const targetId = element.dataset.personId;
-
-        element.classList.remove("selected");
-
-        if (draggedId && targetId) {
-            swapPeople(draggedId, targetId);
-        }
-    });
-}
-
-// ==================================================
-// ОТОБРАЖЕНИЕ РАСПИСАНИЯ
-// ==================================================
-
-function renderSchedule(schedule) {
-    scheduleElement.innerHTML = "";
-
-    schedule.groups.forEach((group, groupIndex) => {
-        const card = document.createElement("section");
-        card.className = "schedule-card";
-        card.dataset.groupIndex = String(groupIndex);
-
-        const header = document.createElement("div");
-        header.className = "schedule-header";
-
-        const headerInfo = document.createElement("div");
-
-        const time = document.createElement("div");
-        time.className = "time";
-        time.textContent = group.time;
-
-        const count = document.createElement("div");
-        count.className = "people-count";
-        count.textContent = `${group.people.length} человек`;
-
-        headerInfo.append(time, count);
-
-        const badge = document.createElement("div");
-        badge.className = "group-badge";
-        badge.textContent = `Группа ${groupIndex + 1}`;
-
-        header.append(headerInfo, badge);
-
-        const people = document.createElement("div");
-        people.className = "people";
-
-        group.people.forEach(person => {
-            const personElement = document.createElement("div");
-
-            personElement.className = "person";
-            personElement.draggable = true;
-            personElement.dataset.personId = person.id;
-
-            if (normalizeName(person.name) === "Курсант") {
-                personElement.classList.add("kursant");
-            }
-
-            const avatar = document.createElement("div");
-            avatar.className = `avatar ${person.gender}`;
-            avatar.textContent = normalizeName(person.name)
-                .charAt(0)
-                .toLocaleUpperCase("ru-RU");
-
-            const name = document.createElement("span");
-            name.className = "person-name";
-            name.textContent = normalizeName(person.name);
-
-            const arrow = document.createElement("span");
-            arrow.className = "person-arrow";
-            arrow.textContent = "↔";
-
-            personElement.append(avatar, name, arrow);
-
-            personElement.addEventListener("click", () => {
-                selectPerson(person.id);
-            });
-
-            setupDrag(personElement);
-            people.appendChild(personElement);
-        });
-
-        card.append(header, people);
-        scheduleElement.appendChild(card);
-    });
-
-    updateSelectedUI();
-}
-
-// ==================================================
-// ПЕРЕГЕНЕРАЦИЯ РАСПИСАНИЯ
-// ==================================================
-
-function regenerateCurrentDay() {
-    const confirmed = confirm(
-        `Перегенерировать расписание на ${formatDate(selectedDate)}?`
+function saveCurrentSchedule(schedule) {
+    schedules = schedules.map(item =>
+        item.date === schedule.date ? schedule : item
     );
 
-    if (!confirmed) return;
+    saveLocalData();
+    saveSchedulesToCloud();
 
-    const schedule = createInitialSchedule(selectedDate);
-
-    if (!schedule) return;
-
-    saveSchedule(schedule);
     renderSchedule(schedule);
-    clearSelection();
 }
 
-// ==================================================
-// ИСТОРИЯ
-// ==================================================
+/* =====================================================
+   11. РУЧНАЯ ГЕНЕРАЦИЯ
+===================================================== */
 
-function renderHistory() {
-    const schedules = getSchedules()
-        .sort((a, b) => b.date.localeCompare(a.date));
-
-    historyList.innerHTML = "";
-
-    if (!schedules.length) {
-        const empty = document.createElement("p");
-        empty.textContent = "История пока пустая.";
-        empty.style.color = "#758391";
-        empty.style.fontSize = "12px";
-
-        historyList.appendChild(empty);
+function generateNewSchedule() {
+    if (employees.length < GROUP_COUNT) {
+        alert("Для расписания нужно минимум 3 сотрудника.");
         return;
     }
 
-    schedules.forEach(schedule => {
-        const item = document.createElement("div");
-        item.className = "history-item";
+    const newSchedule = createInitialSchedule();
 
-        const date = document.createElement("div");
-        date.className = "history-date";
-        date.textContent = formatDate(schedule.date);
+    if (!newSchedule) {
+        alert("Не удалось сформировать расписание. Проверьте список сотрудников.");
+        return;
+    }
 
-        item.appendChild(date);
+    const oldSchedule = getCurrentSchedule();
 
-        schedule.groups.forEach(group => {
-            const time = document.createElement("div");
-            time.className = "history-time";
-            time.textContent = group.time;
-
-            const names = document.createElement("div");
-            names.className = "history-names";
-            names.textContent = group.people
-                .map(person => normalizeName(person.name))
-                .join(", ");
-
-            item.append(time, names);
+    if (oldSchedule) {
+        history.unshift({
+            date: oldSchedule.date,
+            groups: oldSchedule.groups.map(group => ({
+                time: group.time,
+                people: [...group.people]
+            }))
         });
+    }
 
-        historyList.appendChild(item);
-    });
+    schedules = schedules.filter(
+        schedule => schedule.date !== today()
+    );
+
+    schedules.push(newSchedule);
+
+    selectedEmployee = null;
+
+    saveLocalData();
+    saveSchedulesToCloud();
+
+    renderSchedule(newSchedule);
+    renderHistory();
 }
 
-// ==================================================
-// НАСТРОЙКИ СОТРУДНИКОВ
-// ==================================================
+/* =====================================================
+   12. СОТРУДНИКИ: ОТОБРАЖЕНИЕ
+===================================================== */
 
 function renderEmployees() {
-    const employees = getEmployees();
+    if (!employeeList) return;
 
     employeeList.innerHTML = "";
 
-    employees.forEach((person, index) => {
+    employees.forEach(employee => {
         const item = document.createElement("div");
-        item.className = "employee-item";
 
-        const info = document.createElement("div");
-        info.className = "employee-info";
+        item.className = "employee-setting-item";
 
-        const strong = document.createElement("strong");
-        strong.textContent = person.name;
+        item.innerHTML = `
+            <div class="employee-setting-info">
+                <span class="employee-dot ${employee.gender}"></span>
+                <span class="employee-setting-name"></span>
+            </div>
+            <button
+                class="delete-employee"
+                type="button"
+                aria-label="Удалить сотрудника"
+                ${employee.id === "kursant" ? "disabled" : ""}
+            >
+                ×
+            </button>
+        `;
 
-        const gender = document.createElement("span");
-        gender.className = "gender-label";
-        gender.textContent = person.gender === "male"
-            ? "парень"
-            : "девушка";
+        item.querySelector(".employee-setting-name").textContent =
+            employee.name;
 
-        info.append(strong, gender);
+        const deleteButton = item.querySelector(".delete-employee");
 
-        if (person.fixed) {
-            const fixed = document.createElement("span");
-            fixed.className = "gender-label";
-            fixed.textContent = "• всегда 13:00";
-
-            info.appendChild(fixed);
-        }
-
-        const remove = document.createElement("button");
-        remove.className = "delete-employee";
-        remove.dataset.index = String(index);
-        remove.textContent = "×";
-
-        item.append(info, remove);
-        employeeList.appendChild(item);
-    });
-
-    employeeList.querySelectorAll(".delete-employee").forEach(button => {
-        button.addEventListener("click", () => {
-            const index = Number(button.dataset.index);
-            const employees = getEmployees();
-
-            if (employees[index]?.name === "Курсант") {
-                alert("Курсант не может быть удалён.");
-                return;
-            }
-
-            if (employees.length <= 3) {
-                alert("Нельзя оставить меньше трёх сотрудников.");
-                return;
-            }
-
-            const removed = employees[index];
-
-            if (!removed) return;
-
-            const confirmed = confirm(
-                `Удалить сотрудника ${removed.name}?`
-            );
-
-            if (!confirmed) return;
-
-            employees.splice(index, 1);
-
-            saveEmployees(employees);
-
-            // Текущий день формируется заново под новый состав.
-            const newSchedule = createInitialSchedule(selectedDate);
-
-            if (newSchedule) {
-                saveSchedule(newSchedule);
-                renderSchedule(newSchedule);
-            }
-
-            renderEmployees();
+        deleteButton.addEventListener("click", () => {
+            deleteEmployee(employee.id);
         });
+
+        employeeList.appendChild(item);
     });
 }
 
-function addEmployee() {
-    const name = normalizeName(employeeName.value);
-    const gender = employeeGender.value;
+/* =====================================================
+   13. ДОБАВЛЕНИЕ СОТРУДНИКА
+===================================================== */
+
+async function addEmployee() {
+    const name = employeeNameInput?.value.trim();
+    const gender = employeeGenderSelect?.value;
 
     if (!name) {
         alert("Введите имя сотрудника.");
         return;
     }
 
-    const employees = getEmployees();
-
-    const exists = employees.some(person =>
-        person.name.toLocaleLowerCase("ru-RU") ===
-        name.toLocaleLowerCase("ru-RU")
-    );
-
-    if (exists) {
-        alert("Такой сотрудник уже есть.");
+    if (employees.some(employee =>
+        employee.name.toLowerCase() === name.toLowerCase()
+    )) {
+        alert("Такой сотрудник уже существует.");
         return;
     }
 
-    if (employees.length >= 18) {
-        alert("Максимальное количество сотрудников — 18.");
-        return;
-    }
-
-    employees.push({
-        id: `${createIdFromName(name)}-${Date.now()}`,
+    const employee = {
+        id: createId(),
         name,
         gender: gender === "male" ? "male" : "female",
         fixed: false
-    });
-
-    saveEmployees(employees);
-
-    const newSchedule = createInitialSchedule(selectedDate);
-
-    if (newSchedule) {
-        saveSchedule(newSchedule);
-        renderSchedule(newSchedule);
-    }
-
-    employeeName.value = "";
-    renderEmployees();
-}
-
-// ==================================================
-// СОБЫТИЯ ИНТЕРФЕЙСА
-// ==================================================
-
-function attachEvents() {
-    previousDayButton.addEventListener("click", () => {
-        openDate(addDays(selectedDate, -1));
-    });
-
-    nextDayButton.addEventListener("click", () => {
-        openDate(addDays(selectedDate, 1));
-    });
-
-    todayButton.addEventListener("click", () => {
-        openDate(getDateKey());
-    });
-
-    datePicker.addEventListener("change", () => {
-        if (datePicker.value) {
-            openDate(datePicker.value);
-        }
-    });
-
-    generateButton.addEventListener("click", regenerateCurrentDay);
-
-    settingsButton.addEventListener("click", () => {
-        renderEmployees();
-        settingsModal.classList.remove("hidden");
-    });
-
-    closeSettings.addEventListener("click", () => {
-        settingsModal.classList.add("hidden");
-    });
-
-    addEmployeeButton.addEventListener("click", addEmployee);
-
-    employeeName.addEventListener("keydown", event => {
-        if (event.key === "Enter") {
-            addEmployee();
-        }
-    });
-
-    showHistoryButton.addEventListener("click", () => {
-        renderHistory();
-        historyModal.classList.remove("hidden");
-    });
-
-    closeHistory.addEventListener("click", () => {
-        historyModal.classList.add("hidden");
-    });
-
-    cancelMoveButton.addEventListener("click", clearSelection);
-
-    settingsModal.addEventListener("click", event => {
-        if (event.target === settingsModal) {
-            settingsModal.classList.add("hidden");
-        }
-    });
-
-    historyModal.addEventListener("click", event => {
-        if (event.target === historyModal) {
-            historyModal.classList.add("hidden");
-        }
-    });
-}
-
-// ==================================================
-// ПРОВЕРКА HTML
-// ==================================================
-
-function checkRequiredElements() {
-    const required = {
-        app,
-        scheduleElement,
-        currentDateElement,
-        datePicker,
-        previousDayButton,
-        nextDayButton,
-        todayButton,
-        generateButton,
-        settingsButton,
-        settingsModal,
-        closeSettings,
-        employeeList,
-        employeeName,
-        employeeGender,
-        addEmployeeButton,
-        showHistoryButton,
-        historyModal,
-        closeHistory,
-        historyList,
-        moveHint,
-        cancelMoveButton
     };
 
-    const missing = Object.entries(required)
-        .filter(([, element]) => !element)
-        .map(([name]) => name);
+    employees.push(employee);
 
-    if (missing.length) {
-        throw new Error(
-            `В index.html отсутствуют элементы: ${missing.join(", ")}`
+    employeeNameInput.value = "";
+
+    saveLocalData();
+    await saveEmployeesToCloud();
+
+    renderEmployees();
+
+    const newSchedule = createInitialSchedule();
+
+    if (newSchedule) {
+        schedules = schedules.filter(
+            schedule => schedule.date !== today()
         );
+
+        schedules.push(newSchedule);
+
+        saveLocalData();
+        await saveSchedulesToCloud();
+
+        renderSchedule(newSchedule);
+    } else {
+        renderEmptySchedule();
     }
 }
 
-// ==================================================
-// ЗАПУСК
-// ==================================================
+/* =====================================================
+   14. УДАЛЕНИЕ СОТРУДНИКА
+===================================================== */
 
-async function initialize() {
-    try {
-        checkRequiredElements();
-        attachEvents();
+async function deleteEmployee(employeeId) {
+    if (employeeId === "kursant") {
+        alert("Курсант закреплён за третьей группой и не может быть удалён.");
+        return;
+    }
 
-        await loadInitialCloudData();
+    const employee = getEmployeeById(employeeId);
 
-        // Сохраняем очищенный список и нормализованные расписания.
-        saveEmployees(getEmployees());
-        saveSchedules(getSchedules());
+    if (!employee) return;
 
-        openDate(getDateKey());
+    const confirmed = confirm(
+        `Удалить сотрудника «${employee.name}»?`
+    );
 
-        app.hidden = false;
+    if (!confirmed) return;
 
-        startCloudListeners();
+    employees = employees.filter(
+        person => person.id !== employeeId
+    );
 
-        if (loadingScreen) {
-            setTimeout(() => {
-                loadingScreen.classList.add("hide");
+    // Удаляем сотрудника из всех сохранённых расписаний.
+    schedules = schedules.map(schedule => ({
+        ...schedule,
+        groups: schedule.groups.map(group => ({
+            ...group,
+            people: group.people.filter(id => id !== employeeId)
+        }))
+    }));
 
-                setTimeout(() => {
-                    loadingScreen.remove();
-                }, 500);
-            }, 500);
+    history = history.map(schedule => ({
+        ...schedule,
+        groups: schedule.groups.map(group => ({
+            ...group,
+            people: group.people.filter(id => id !== employeeId)
+        }))
+    }));
+
+    selectedEmployee = null;
+
+    saveLocalData();
+
+    await saveEmployeesToCloud();
+    await saveSchedulesToCloud();
+
+    renderEmployees();
+
+    if (employees.length >= GROUP_COUNT) {
+        const newSchedule = createInitialSchedule();
+
+        if (newSchedule) {
+            schedules = schedules.filter(
+                schedule => schedule.date !== today()
+            );
+
+            schedules.push(newSchedule);
+
+            saveLocalData();
+            await saveSchedulesToCloud();
+
+            renderSchedule(newSchedule);
+        } else {
+            renderEmptySchedule();
         }
-
-        console.log("Рандомайзер запущен.");
-        console.log("Сотрудников:", getEmployees().length);
-        console.log("Размер групп:", getGroupSizes(getEmployees().length));
-
-    } catch (error) {
-        console.error("Ошибка запуска:", error);
-
-        if (loadingScreen) {
-            loadingScreen.classList.add("hide");
-
-            setTimeout(() => {
-                loadingScreen.remove();
-            }, 500);
-        }
-
-        alert(
-            "Не удалось загрузить приложение. Проверь Firebase и правила Firestore. Подробности смотри в консоли разработчика."
+    } else {
+        schedules = schedules.filter(
+            schedule => schedule.date !== today()
         );
+
+        await saveSchedulesToCloud();
+        renderEmptySchedule();
     }
 }
 
-// ==================================================
-// АВТОПРОВЕРКА РАСПИСАНИЯ
-// ==================================================
+/* =====================================================
+   15. ИСТОРИЯ
+===================================================== */
 
-setInterval(() => {
-    if (!cloudReady) return;
+function renderHistory() {
+    if (!historyList) return;
 
-    const today = getDateKey();
+    historyList.innerHTML = "";
 
-    if (selectedDate === today) {
-        const current = findSchedule(today);
+    if (history.length === 0) {
+        historyList.innerHTML = `
+            <div class="empty-history">
+                История пока пуста.
+            </div>
+        `;
 
-        if (!current || !scheduleMatchesEmployees(current)) {
-            const schedule = ensureScheduleChain(today);
+        return;
+    }
 
-            if (schedule) {
-                renderSchedule(schedule);
-            }
+    history.forEach(schedule => {
+        const historyItem = document.createElement("div");
+
+        historyItem.className = "history-item";
+
+        const heading = document.createElement("h3");
+        heading.textContent = formatDate(schedule.date);
+
+        historyItem.appendChild(heading);
+
+        schedule.groups.forEach((group, index) => {
+            const groupElement = document.createElement("div");
+
+            groupElement.className = "history-group";
+
+            const title = document.createElement("strong");
+            title.textContent = GROUP_TIMES[index];
+
+            const names = document.createElement("p");
+
+            names.textContent = group.people
+                .map(id => getEmployeeById(id)?.name)
+                .filter(Boolean)
+                .join(", ");
+
+            groupElement.appendChild(title);
+            groupElement.appendChild(names);
+
+            historyItem.appendChild(groupElement);
+        });
+
+        historyList.appendChild(historyItem);
+    });
+}
+
+/* =====================================================
+   16. МОДАЛЬНЫЕ ОКНА
+===================================================== */
+
+function openModal(modal) {
+    if (!modal) return;
+
+    modal.classList.add("active");
+}
+
+function closeModal(modal) {
+    if (!modal) return;
+
+    modal.classList.remove("active");
+}
+
+settingsButton?.addEventListener("click", () => {
+    renderEmployees();
+    openModal(settingsModal);
+});
+
+closeSettings?.addEventListener("click", () => {
+    closeModal(settingsModal);
+});
+
+showHistoryButton?.addEventListener("click", () => {
+    renderHistory();
+    openModal(historyModal);
+});
+
+closeHistory?.addEventListener("click", () => {
+    closeModal(historyModal);
+});
+
+[settingsModal, historyModal].forEach(modal => {
+    modal?.addEventListener("click", event => {
+        if (event.target === modal) {
+            closeModal(modal);
+        }
+    });
+});
+
+/* =====================================================
+   17. ОБРАБОТЧИКИ КНОПОК
+===================================================== */
+
+generateButton?.addEventListener("click", generateNewSchedule);
+
+addEmployeeButton?.addEventListener("click", addEmployee);
+
+employeeNameInput?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+        addEmployee();
+    }
+});
+
+/* =====================================================
+   18. СИНХРОНИЗАЦИЯ FIREBASE В РЕАЛЬНОМ ВРЕМЕНИ
+===================================================== */
+
+onSnapshot(employeesRef, snapshot => {
+    if (!snapshot.exists() || isUpdatingFromCloud) return;
+
+    const cloudEmployees = cleanEmployees(
+        snapshot.data().items || []
+    );
+
+    const currentIds = employees.map(employee => employee.id).sort();
+    const cloudIds = cloudEmployees.map(employee => employee.id).sort();
+
+    if (JSON.stringify(currentIds) === JSON.stringify(cloudIds)) return;
+
+    employees = cloudEmployees;
+
+    saveLocalData();
+    renderEmployees();
+
+    const currentSchedule = getCurrentSchedule();
+
+    if (currentSchedule && !scheduleMatchesEmployees(currentSchedule)) {
+        const newSchedule = createInitialSchedule();
+
+        if (newSchedule) {
+            schedules = schedules.filter(
+                schedule => schedule.date !== today()
+            );
+
+            schedules.push(newSchedule);
+
+            saveLocalData();
+            saveSchedulesToCloud();
+
+            renderSchedule(newSchedule);
+        } else {
+            renderEmptySchedule();
         }
     }
-}, 60000);
+});
 
-initialize();
+/* =====================================================
+   19. ЗАПУСК ПРИЛОЖЕНИЯ
+===================================================== */
+
+async function init() {
+    loadLocalData();
+
+    if (employees.length === 0) {
+        employees = [...DEFAULT_EMPLOYEES];
+    }
+
+    renderEmployees();
+    updateDate();
+
+    await loadInitialCloudData();
+}
+
+init();
