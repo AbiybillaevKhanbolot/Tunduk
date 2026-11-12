@@ -16,12 +16,13 @@ import {
 // projectId уже указан для твоего проекта.
 
 const firebaseConfig = {
-    apiKey: "ВСТАВЬ_СВОЙ_API_KEY",
-    authDomain: "lunch-randomizer-40a83.firebaseapp.com",
-    projectId: "lunch-randomizer-40a83",
-    storageBucket: "lunch-randomizer-40a83.firebasestorage.app",
-    messagingSenderId: "ВСТАВЬ_SENDER_ID",
-    appId: "ВСТАВЬ_APP_ID"
+  apiKey: "AIzaSyB9WVKkU1fRC7DfdWK58ok8CVAOILINM6o",
+  authDomain: "lunch-randomizer-40a83.firebaseapp.com",
+  projectId: "lunch-randomizer-40a83",
+  storageBucket: "lunch-randomizer-40a83.firebasestorage.app",
+  messagingSenderId: "61702529285",
+  appId: "1:61702529285:web:ca7ba0af6cf4e9572c576c",
+  measurementId: "G-27CZ1FHCZL"
 };
 
 const app = initializeApp(firebaseConfig);
