@@ -1199,21 +1199,89 @@ onSnapshot(employeesRef, snapshot => {
     }
 });
 
+
 /* =====================================================
    19. ЗАПУСК ПРИЛОЖЕНИЯ
 ===================================================== */
 
-async function init() {
-    loadLocalData();
+const loadingScreen = document.getElementById("loadingScreen");
+const appElement = document.getElementById("app");
 
-    if (employees.length === 0) {
-        employees = [...DEFAULT_EMPLOYEES];
+function showApplication() {
+    // Показываем основное приложение
+    if (appElement) {
+        appElement.hidden = false;
     }
 
-    renderEmployees();
-    updateDate();
+    // Скрываем экран загрузки
+    if (loadingScreen) {
+        loadingScreen.classList.add("hide");
+    }
+}
 
-    await loadInitialCloudData();
+async function init() {
+    try {
+        // 1. Загружаем локальные данные
+        loadLocalData();
+
+        // 2. Если сотрудников нет — используем стандартный список
+        if (employees.length === 0) {
+            employees = [...DEFAULT_EMPLOYEES];
+        }
+
+        // 3. Сразу отображаем приложение
+        renderEmployees();
+        updateDate();
+
+        let currentSchedule = getCurrentSchedule();
+
+        if (currentSchedule && scheduleMatchesEmployees(currentSchedule)) {
+            renderSchedule(currentSchedule);
+        } else {
+            const newSchedule = createInitialSchedule();
+
+            if (newSchedule) {
+                schedules = schedules.filter(
+                    schedule => schedule.date !== today()
+                );
+
+                schedules.push(newSchedule);
+
+                saveLocalData();
+                renderSchedule(newSchedule);
+            } else {
+                renderEmptySchedule();
+            }
+        }
+
+        // 4. Скрываем загрузку
+        showApplication();
+
+        // 5. Загружаем данные Firebase в фоне
+        loadInitialCloudData();
+
+    } catch (error) {
+        console.error("Ошибка запуска приложения:", error);
+
+        // Даже при ошибке показываем приложение
+        if (employees.length === 0) {
+            employees = [...DEFAULT_EMPLOYEES];
+        }
+
+        renderEmployees();
+
+        const newSchedule = createInitialSchedule();
+
+        if (newSchedule) {
+            schedules = [newSchedule];
+            renderSchedule(newSchedule);
+        } else {
+            renderEmptySchedule();
+        }
+
+        showApplication();
+    }
 }
 
 init();
+
